@@ -3,7 +3,8 @@ import { kungalgameResponseHandler } from '~/utils/responseHandler'
 import {
   MAX_SMALL_FILE_SIZE,
   MAX_LARGE_FILE_SIZE,
-  USER_DAILY_UPLOAD_LIMIT
+  USER_DAILY_UPLOAD_LIMIT,
+  MOEMOEPOINT_SINGLE_MB_DIVISOR
 } from '~/config/upload'
 import {
   initToolsetUploadSchema,
@@ -25,8 +26,15 @@ const emits = defineEmits<{
 }>()
 
 const MB = 1024 * 1024
+const UPLOAD_TRANSFER_FAILED = 'UPLOAD_TRANSFER_FAILED'
+type ToolsetUploadStatus =
+  (typeof KUN_GALGAME_TOOLSET_UPLOAD_STATUS_CONST)[number]
+type ToolsetUploadPart = {
+  PartNumber: number
+  ETag: string
+}
 
-const { moemoepoint, dailyToolsetUploadCount } = storeToRefs(
+const { moemoepoint, dailyToolsetUploadCount, role } = storeToRefs(
   usePersistUserStore()
 )
 const fileInput = ref<HTMLInputElement>()
@@ -34,19 +42,36 @@ const selectedFile = ref<File | null>(null)
 
 const progress = ref(0)
 const isDragging = ref(false)
-const uploadStatus =
-  ref<(typeof KUN_GALGAME_TOOLSET_UPLOAD_STATUS_CONST)[number]>('idle')
+const uploadStatus = ref<ToolsetUploadStatus>('idle')
 
 const isLarge = computed(() => {
   const f = selectedFile.value
   return !!f && f.size > MAX_SMALL_FILE_SIZE
 })
-const userUploadLimit = computed(
-  () =>
-    USER_DAILY_UPLOAD_LIMIT +
-    moemoepoint.value * MB -
-    dailyToolsetUploadCount.value
-)
+const isAdmin = computed(() => role.value > 1)
+const dailyUploadLimit = computed(() => {
+  if (isAdmin.value) {
+    return MAX_LARGE_FILE_SIZE
+  }
+
+  return (
+    Math.max(0, USER_DAILY_UPLOAD_LIMIT - dailyToolsetUploadCount.value) +
+    moemoepoint.value * MB
+  )
+})
+const maxSingleFileLimit = computed(() => {
+  if (isAdmin.value) {
+    return MAX_LARGE_FILE_SIZE
+  }
+
+  const moemoepointMaxSingleFile =
+    Math.floor(moemoepoint.value / MOEMOEPOINT_SINGLE_MB_DIVISOR) * MB
+
+  return Math.min(
+    Math.max(USER_DAILY_UPLOAD_LIMIT, moemoepointMaxSingleFile),
+    MAX_LARGE_FILE_SIZE
+  )
+})
 
 const statusMessage = computed(() => {
   if (uploadStatus.value === 'largeUploading') {
@@ -55,6 +80,57 @@ const statusMessage = computed(() => {
     return KUN_GALGAME_TOOLSET_UPLOAD_STATUS_MAP[uploadStatus.value]
   }
 })
+
+const resetUploadState = () => {
+  progress.value = 0
+  uploadStatus.value = 'idle'
+}
+
+const setSelectedUploadFile = (file: File) => {
+  selectedFile.value = file
+  resetUploadState()
+}
+
+const throwIfUploadFailed = (response: Response) => {
+  if (!response.ok) {
+    throw new Error(UPLOAD_TRANSFER_FAILED)
+  }
+}
+
+const isUploadTransferFailedError = (error: unknown) => {
+  return error instanceof Error && error.message === UPLOAD_TRANSFER_FAILED
+}
+
+const notifyUploadTransferError = (error: unknown) => {
+  if (isUploadTransferFailedError(error)) {
+    useMessage('文件传输失败，请重试', 'error')
+  }
+}
+
+const abortLargeUpload = async (upload: ToolsetLargeFileUploadResponse) => {
+  const abortUploadData = {
+    salt: upload.salt,
+    uploadId: upload.uploadId
+  }
+  const isValidAbortUploadData = useKunSchemaValidator(
+    abortToolsetUploadSchema,
+    abortUploadData
+  )
+  if (!isValidAbortUploadData) {
+    return
+  }
+
+  try {
+    await $fetch(`/api/toolset/${props.toolsetId}/upload/abort`, {
+      method: 'POST',
+      body: abortUploadData,
+      watch: false,
+      ...kungalgameResponseHandler
+    })
+  } catch (abortError) {
+    console.error('Failed to abort toolset upload:', abortError)
+  }
+}
 
 const checkFileValid = (file: File | null) => {
   if (!file) {
@@ -71,9 +147,16 @@ const checkFileValid = (file: File | null) => {
     )
     return false
   }
-  if (file.size > userUploadLimit.value) {
+  if (file.size > dailyUploadLimit.value) {
     useMessage(
-      `文件大小超过您的可用上传额度 ${(userUploadLimit.value / MB).toFixed(1)} MB`,
+      `超出当日可用上传额度, 剩余 ${(dailyUploadLimit.value / MB).toFixed(2)} MB`,
+      'warn'
+    )
+    return false
+  }
+  if (file.size > maxSingleFileLimit.value) {
+    useMessage(
+      `单文件大小超过限制, 最大 ${(maxSingleFileLimit.value / MB).toFixed(2)} MB`,
       'warn'
     )
     return false
@@ -89,7 +172,7 @@ const onChange = (e: Event) => {
   if (!res) {
     return
   }
-  selectedFile.value = targetFile
+  setSelectedUploadFile(targetFile)
 }
 const onDrop = (e: DragEvent) => {
   e.preventDefault()
@@ -101,7 +184,7 @@ const onDrop = (e: DragEvent) => {
     if (!res) {
       return
     }
-    selectedFile.value = dt.files[0]!
+    setSelectedUploadFile(dt.files[0]!)
   }
 }
 const onDragOver = (e: DragEvent) => {
@@ -121,7 +204,7 @@ const clearSelected = () => {
   if (fileInput.value) {
     fileInput.value.value = ''
   }
-  uploadStatus.value = 'idle'
+  resetUploadState()
 }
 
 const uploadSmall = async (f: File) => {
@@ -131,42 +214,51 @@ const uploadSmall = async (f: File) => {
     filename: f.name,
     filesize: f.size
   }
-  const result = useKunSchemaValidator(initToolsetUploadSchema, initUploadData)
-  if (!result) {
+  const isValidInitUploadData = useKunSchemaValidator(
+    initToolsetUploadSchema,
+    initUploadData
+  )
+  if (!isValidInitUploadData) {
     return
   }
 
-  const initRes = await $fetch(`/api/toolset/${props.toolsetId}/upload/small`, {
-    method: 'POST',
-    body: initUploadData,
-    watch: false,
-    ...kungalgameResponseHandler
-  })
+  const initRes = await $fetch<ToolsetSmallFileUploadResponse>(
+    `/api/toolset/${props.toolsetId}/upload/small`,
+    {
+      method: 'POST',
+      body: initUploadData,
+      watch: false,
+      ...kungalgameResponseHandler
+    }
+  )
   if (!initRes) {
     uploadStatus.value = 'idle'
     return
   }
 
+  let isUploadComplete = false
   try {
     uploadStatus.value = 'smallUploading'
-    await fetch(initRes.url, {
+    const uploadRes = await fetch(initRes.url, {
       headers: { 'Content-Type': 'application/octet-stream' },
       method: 'PUT',
       body: f
     })
+    throwIfUploadFailed(uploadRes)
 
     uploadStatus.value = 'smallComplete'
     const completeUploadData = {
       salt: initRes.salt
     }
-    const result = useKunSchemaValidator(
+    const isValidCompleteUploadData = useKunSchemaValidator(
       completeToolsetUploadSchema,
       completeUploadData
     )
-    if (!result) {
+    if (!isValidCompleteUploadData) {
       return
     }
-    const done = await $fetch(
+
+    const done = await $fetch<ToolsetUploadCompleteResponse>(
       `/api/toolset/${props.toolsetId}/upload/complete`,
       {
         method: 'POST',
@@ -178,9 +270,16 @@ const uploadSmall = async (f: File) => {
     if (done) {
       useMessage('上传成功', 'success')
       emits('onUploadSuccess', done)
+      progress.value = 100
+      uploadStatus.value = 'complete'
+      isUploadComplete = true
     }
+  } catch (error) {
+    notifyUploadTransferError(error)
   } finally {
-    uploadStatus.value = 'complete'
+    if (!isUploadComplete) {
+      resetUploadState()
+    }
   }
 }
 
@@ -191,37 +290,42 @@ const uploadLarge = async (f: File) => {
     filename: f.name,
     filesize: f.size
   }
-  const result = useKunSchemaValidator(initToolsetUploadSchema, initUploadData)
-  if (!result) {
+  const isValidInitUploadData = useKunSchemaValidator(
+    initToolsetUploadSchema,
+    initUploadData
+  )
+  if (!isValidInitUploadData) {
     return
   }
 
   progress.value = 0
-  const initRes = await $fetch(`/api/toolset/${props.toolsetId}/upload/large`, {
-    method: 'POST',
-    body: initUploadData,
-    watch: false,
-    ...kungalgameResponseHandler
-  })
+  const initRes = await $fetch<ToolsetLargeFileUploadResponse>(
+    `/api/toolset/${props.toolsetId}/upload/large`,
+    {
+      method: 'POST',
+      body: initUploadData,
+      watch: false,
+      ...kungalgameResponseHandler
+    }
+  )
   if (!initRes) {
     uploadStatus.value = 'idle'
     return
   }
 
+  let isUploadComplete = false
   try {
-    const partSize: number = initRes.partSize
-    const urls: {
-      partNumber: number
-      url: string
-    }[] = initRes.urls
-    const parts: {
-      PartNumber: number
-      ETag: string
-    }[] = []
+    const { partSize, urls } = initRes
+    const parts: ToolsetUploadPart[] = []
 
     uploadStatus.value = 'largeUploading'
     for (let i = 0; i < urls.length; i++) {
-      const { partNumber, url } = urls[i]!
+      const currentPart = urls[i]
+      if (!currentPart) {
+        throw new Error('Missing upload part')
+      }
+
+      const { partNumber, url } = currentPart
       const start = (partNumber - 1) * partSize
       const end = Math.min(start + partSize, f.size)
       const blob = f.slice(start, end)
@@ -230,6 +334,7 @@ const uploadLarge = async (f: File) => {
         method: 'PUT',
         body: blob
       })
+      throwIfUploadFailed(resp)
       const etag = resp.headers.get('ETag') || resp.headers.get('etag')
       if (!etag) {
         throw new Error('Missing ETag')
@@ -244,15 +349,15 @@ const uploadLarge = async (f: File) => {
       uploadId: initRes.uploadId,
       parts
     }
-    const result = useKunSchemaValidator(
+    const isValidCompleteUploadData = useKunSchemaValidator(
       completeToolsetUploadSchema,
       completeUploadData
     )
-    if (!result) {
+    if (!isValidCompleteUploadData) {
       return
     }
 
-    const done = await $fetch(
+    const done = await $fetch<ToolsetUploadCompleteResponse>(
       `/api/toolset/${props.toolsetId}/upload/complete`,
       {
         method: 'POST',
@@ -264,30 +369,19 @@ const uploadLarge = async (f: File) => {
     if (done) {
       useMessage('上传成功', 'success')
       emits('onUploadSuccess', done)
+      uploadStatus.value = 'complete'
+      isUploadComplete = true
     }
-  } catch (e) {
+  } catch (error) {
     if (initRes?.uploadId) {
-      const abortUploadData = {
-        salt: initRes.salt,
-        uploadId: initRes.uploadId
-      }
-      const result = useKunSchemaValidator(
-        abortToolsetUploadSchema,
-        abortUploadData
-      )
-      if (!result) {
-        return
-      }
-
-      await $fetch(`/api/toolset/${props.toolsetId}/upload/abort`, {
-        method: 'POST',
-        body: abortUploadData,
-        watch: false,
-        ...kungalgameResponseHandler
-      })
+      await abortLargeUpload(initRes)
     }
+
+    notifyUploadTransferError(error)
   } finally {
-    uploadStatus.value = 'complete'
+    if (!isUploadComplete) {
+      resetUploadState()
+    }
   }
 }
 

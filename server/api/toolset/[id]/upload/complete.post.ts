@@ -30,6 +30,16 @@ export default defineEventHandler(async (event) => {
     return kunError(event, '上传文件缓存信息获取失败')
   }
 
+  const cleanupFailedUpload = async () => {
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: process.env.KUN_VISUAL_NOVEL_S3_STORAGE_BUCKET_NAME!,
+        Key: fileCache.key
+      })
+    )
+    await removeUploadCache(salt)
+  }
+
   if (uploadId) {
     if (!parts || !parts.length) {
       return kunError(event, '分片信息缺失')
@@ -74,18 +84,13 @@ export default defineEventHandler(async (event) => {
 
   const actualBytes = Number(head.ContentLength || 0)
   if (!actualBytes || actualBytes !== fileCache.filesize) {
-    await s3.send(
-      new DeleteObjectCommand({
-        Bucket: process.env.KUN_VISUAL_NOVEL_S3_STORAGE_BUCKET_NAME!,
-        Key: fileCache.key
-      })
-    )
-    await removeUploadCache(salt)
+    await cleanupFailedUpload()
     return kunError(event, '文件大小校验失败，请重试或联系管理员')
   }
 
   const result = await canUserUpload(userInfo.uid, actualBytes)
   if (typeof result === 'string') {
+    await cleanupFailedUpload()
     return kunError(event, result)
   }
 
