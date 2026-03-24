@@ -1,41 +1,70 @@
-# Nuxt dev/build outputs
+# Build / output
+dist
 .output
 .data
 .nuxt
 .nitro
 .cache
-dist
+.vercel
+.netlify
+.vinxi
+.turbo
+apps/api/build
 
-# Node dependencies
+# Environment
+.env
+.env.*
+.env*.local
+.env*.production
+.env.goenv
+!.env.example
+
+# Dependencies
 node_modules
+**/node_modules
+.pnpm-store
 
 # Logs
 logs
 *.log
 
-# Misc
-.DS_Store
-.fleet
-.idea
-
-# Local env files
-.env
-.env.*
-!.env.example
-
-# backup
-/backup
+# IDE / Editors
 .vs
+.idea
+/.idea
+.settings/
+.project
+.classpath
+*.launch
+.fleet
 
-# sitemap
+# System files
+.DS_Store
+Thumbs.db
+
+# Temp / misc
+tmp
+gitignore
+
+# Generated files
+apps/web/public/sitemap.xml
+apps/web/public/urls.txt
 public/*.xml
-
-# prisma generated
 prisma/generated
 
-# docs
+# Docs
 docs/milkdown
 docs/milkdown-src
 
-# ignore for devcontainer
-.pnpm-store
+# Backup
+backup
+!scripts/backup
+
+# Prompts
+prompts
+
+# Reference
+refs
+
+# Nuxt specific
+app.config.timestamp_*.js

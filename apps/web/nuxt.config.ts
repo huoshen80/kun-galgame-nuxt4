@@ -5,9 +5,11 @@ import { ICON_COLLECTIONS, ICON_NAMES } from './lib/icon'
 import type { TSConfig } from 'pkg-types'
 
 const packageJson = JSON.parse(
-  fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')
+  fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf-8')
 )
 const appVersion = packageJson.version
+
+console.log(appVersion)
 
 const sharedTsConfig: TSConfig = {
   exclude: ['**/backup/**', '**/dist/**', '**/node_modules/**', '**/prisma/**']
