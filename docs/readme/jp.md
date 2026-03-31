@@ -1,6 +1,6 @@
-![kun-galgame-nuxt4](https://www.kungal.com/kungalgame.webp)
+![kun-galgame-nuxt4](https://kungal.com/kungalgame.webp)
 
-### **[English](/Readme.md)** | **[日本語](./Readme_JA_JP.md)** | **[简体中文](./Readme_ZH_CN.md)** | **[繁體中文](./Readme_ZH_TW.md)**
+### **[English](/README.md)** | **[日本語](/docs/readme/jp.md)** | **[简体中文](/docs/readme/chs.md)** | **[繁體中文](/docs/readme/cht.md)**
 
 **お問い合わせ：[Telegram](https://t.me/kungalgame) | [Discord](https://discord.com/invite/5F4FS2cXhX)**
 
